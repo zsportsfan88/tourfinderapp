@@ -46,7 +46,7 @@ export async function fetchTopArtists(accessToken) {
   // Sort by liked song count, take top 20
   const sorted = Object.values(artists)
     .sort((a, b) => b.likedSongs - a.likedSongs)
-    .slice(0, 20);
+    .slice(0, 100);
 
   // Fetch genres + images for top artists (batch by 50)
   await enrichArtists(sorted, accessToken);
