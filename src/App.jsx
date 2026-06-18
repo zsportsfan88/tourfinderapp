@@ -515,11 +515,7 @@ export default function App() {
     const filtered = fetched
       .map(({ artist, events }) => ({
         artist,
-        events: events.filter(ev => {
-          const lat = parseFloat(ev.venue?.latitude), lon = parseFloat(ev.venue?.longitude);
-          if (isNaN(lat) || isNaN(lon)) return true;
-          return haversineDistance(coords.lat, coords.lon, lat, lon) <= radiusMiles;
-        }),
+       events: events,
       }))
       .filter(({ events }) => events.length > 0);
 
