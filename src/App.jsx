@@ -582,7 +582,7 @@ export default function App() {
         {phase === "loading" && (
           <div style={{ textAlign: "center", paddingTop: 80 }}>
             <div style={{ fontSize: 36, marginBottom: 20 }}>🎵</div>
-            <div style={{ color: "#dde", fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Loading your library…</div>
+            <div style={{ color: "#dde", fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Scanning your library…</div>
             <div style={{ color: "#334455", fontSize: 12 }}>Reading liked songs and building your artist list</div>
           </div>
         )}
