@@ -584,7 +584,7 @@ export default function App() {
             <div style={{ fontSize: 36, marginBottom: 20 }}>🎵</div>
            <div style={{ color: "#dde", fontSize: 15, fontWeight: 600, marginBottom: 8 }}>Scanning your library…</div>
 <div style={{ color: "#334455", fontSize: 12, marginBottom: 24 }}>{loadProgress.total > 0 ? `${loadProgress.scanned.toLocaleString()} of ${loadProgress.total.toLocaleString()} songs scanned` : "Reading liked songs…"}</div>
-{loadProgress.total > 0 && (<div style={{ maxWidth: 300, margin: "0 auto" }}><div style={{ background: "#1a1a2a", borderRadius: 99, height: 6, overflow: "hidden" }}><div style={{ height: "100%", background: "linear-gradient(90deg, #1db954, #17a349)", borderRadius: 99, width: `${Math.min((loadProgress.scanned / loadProgress.total) * 100, 100)}%`, transition: "width 0.3s ease" }} /></div><div style={{ color: "#334455", fontSize: 11, marginTop: 8 }}>{Math.round((loadProgress.scanned / loadProgress.total) * 100)}% complete</div></div>)}
+<div style={{ color: "#334455", fontSize: 12 }}>Reading liked songs and building your artist list</div>
           </div>
         )}
 
