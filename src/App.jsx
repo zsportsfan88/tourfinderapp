@@ -5,6 +5,15 @@ import { fetchTopArtists } from "./spotify.js";
 const BIT_APP_ID = "tourfinderapp";
 
 async function fetchBandsintownEvents(artistName) {
+  return [{
+    venue: { name: "Click to see all shows", city: "", region: "" },
+    datetime: null,
+    offers: [],
+    url: `https://www.bandsintown.com/a/${encodeURIComponent(artistName)}?came_from=267`,
+    lineupName: artistName,
+    isFallback: true,
+  }];
+}
   try {
     const encoded = encodeURIComponent(artistName);
     const res = await fetch(
