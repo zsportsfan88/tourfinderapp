@@ -1,56 +1,46 @@
-// src/spotify.js
-// Fetches the user's liked songs library and aggregates by artist.
-// Paginates through up to 500 tracks (10 pages of 50).
-
-const MAX_PAGES = 200;
+const MAX_TRACKS = 10000;
+const BATCH_SIZE = 10;
 
 export async function fetchTopArtists(accessToken) {
+  // First get total count
+  const first = await fetch('https://api.spotify.com/v1/me/tracks?limit=1', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const firstData = await first.json();
+  const total = Math.min(firstData.total || 0, MAX_TRACKS);
+
+  // Build all URLs upfront
+  const offsets = [];
+  for (let i = 0; i < total; i += 50) offsets.push(i);
+
+  // Fetch in batches of 10 simultaneously
   let artists = {};
-  let url = 'https://api.spotify.com/v1/me/tracks?limit=50';
-  let pages = 0;
-
-  while (url && pages < MAX_PAGES) {
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-
-    if (!res.ok) {
-      console.error('Spotify API error:', res.status);
-      break;
-    }
-
-    const data = await res.json();
-
-    for (const item of data.items || []) {
-      const track = item.track;
-      if (!track) continue;
-
-      for (const artist of track.artists || []) {
-        if (!artists[artist.id]) {
-          artists[artist.id] = {
-            id:        artist.id,
-            name:      artist.name,
-            likedSongs: 0,
-            image:     null,
-            genres:    [],
-          };
+  for (let i = 0; i < offsets.length; i += BATCH_SIZE) {
+    const batch = offsets.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(batch.map(offset =>
+      fetch(`https://api.spotify.com/v1/me/tracks?limit=50&offset=${offset}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }).then(r => r.json())
+    ));
+    for (const data of results) {
+      for (const item of data.items || []) {
+        const track = item.track;
+        if (!track) continue;
+        for (const artist of track.artists || []) {
+          if (!artists[artist.id]) {
+            artists[artist.id] = { id: artist.id, name: artist.name, likedSongs: 0, image: null, genres: [] };
+          }
+          artists[artist.id].likedSongs++;
         }
-        artists[artist.id].likedSongs++;
       }
     }
-
-    url = data.next || null;
-    pages++;
   }
 
-  // Sort by liked song count, take top 20
   const sorted = Object.values(artists)
     .sort((a, b) => b.likedSongs - a.likedSongs)
     .slice(0, 100);
 
-  // Fetch genres + images for top artists (batch by 50)
   await enrichArtists(sorted, accessToken);
-
   return sorted;
 }
 
@@ -59,15 +49,12 @@ async function enrichArtists(artists, accessToken) {
   const res = await fetch(`https://api.spotify.com/v1/artists?ids=${ids}`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-
   if (!res.ok) return;
-
   const data = await res.json();
-
   for (const fullArtist of data.artists || []) {
     const match = artists.find(a => a.id === fullArtist.id);
     if (!match) continue;
     match.genres = fullArtist.genres?.slice(0, 2) || [];
-    match.image  = fullArtist.images?.[1]?.url || fullArtist.images?.[0]?.url || null;
+    match.image = fullArtist.images?.[1]?.url || fullArtist.images?.[0]?.url || null;
   }
 }
