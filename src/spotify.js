@@ -2,7 +2,7 @@
 // Fetches the user's liked songs library and aggregates by artist.
 // Paginates through up to 500 tracks (10 pages of 50).
 
-const MAX_PAGES = 400;
+const MAX_PAGES = 200;
 
 export async function fetchTopArtists(accessToken) {
   let artists = {};
