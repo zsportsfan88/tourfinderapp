@@ -8,7 +8,7 @@ async function fetchBandsintownEvents(artistName) {
     venue: { name: "View upcoming shows", city: "", region: "", latitude: null, longitude: null },
     datetime: null,
     offers: [],
-   url: `https://www.bandsintown.com/a/${artistName.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9\-]/g, "")}`,
+   url: `https://www.bandsintown.com/search?query=${encodeURIComponent(artistName)}`,
     lineupName: artistName,
   }];
 }
