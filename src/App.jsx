@@ -1,18 +1,49 @@
 import { useState, useEffect, useMemo } from "react";
 import { fetchTopArtists } from "./spotify.js";
 
-async function fetchBandsintownProfile(artistName) {
+const TM_API_KEY = "zJUvSRwFFL8C29KJDGqC76eO1HmP5Xbl";
+
+async function fetchTicketmasterShows(artistName, userLat, userLon, radiusMiles) {
   try {
-    const encoded = encodeURIComponent(artistName);
-    const res = await fetch(
-      `https://rest.bandsintown.com/artists/${encoded}?app_id=tourfinderapp`,
-      { headers: { Accept: "application/json" } }
+    // Step 1: Find the artist's Ticketmaster attraction ID
+    const attractionRes = await fetch(
+      `https://app.ticketmaster.com/discovery/v2/attractions.json?apikey=${TM_API_KEY}&keyword=${encodeURIComponent(artistName)}&size=1`
     );
-    if (!res.ok) throw new Error("not found");
-    const data = await res.json();
-    return data.url || `https://www.bandsintown.com/search?query=${encoded}`;
-  } catch {
-    return `https://www.bandsintown.com/search?query=${encodeURIComponent(artistName)}`;
+    if (!attractionRes.ok) return [];
+    const attractionData = await attractionRes.json();
+    const attractions = attractionData._embedded?.attractions;
+    if (!attractions?.length) return [];
+    const attractionId = attractions[0].id;
+
+    // Step 2: Find upcoming events for that artist near the user
+    const eventsRes = await fetch(
+      `https://app.ticketmaster.com/discovery/v2/events.json?apikey=${TM_API_KEY}&attractionId=${attractionId}&latlong=${userLat},${userLon}&radius=${radiusMiles}&unit=miles&sort=date,asc&size=5&classificationName=music`
+    );
+    if (!eventsRes.ok) return [];
+    const eventsData = await eventsRes.json();
+    const events = eventsData._embedded?.events;
+    if (!events?.length) return [];
+
+    return events.map(ev => {
+      const venue = ev._embedded?.venues?.[0] || {};
+      return {
+        id: ev.id,
+        name: ev.name,
+        datetime: ev.dates?.start?.dateTime || ev.dates?.start?.localDate,
+        venue: {
+          name: venue.name || "",
+          city: venue.city?.name || "",
+          region: venue.state?.stateCode || "",
+          latitude: venue.location?.latitude,
+          longitude: venue.location?.longitude,
+        },
+        ticketUrl: ev.url,
+        imageUrl: ev.images?.find(i => i.ratio === "16_9" && i.width > 500)?.url,
+      };
+    });
+  } catch (e) {
+    console.error("TM error for", artistName, e);
+    return [];
   }
 }
 
@@ -29,6 +60,14 @@ async function zipToCoords(zip) {
       city: `${place["place name"]}, ${place["state abbreviation"]}`,
     };
   } catch { return null; }
+}
+
+function haversineDistance(lat1, lon1, lat2, lon2) {
+  const R = 3958.8;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos((lat1*Math.PI)/180)*Math.cos((lat2*Math.PI)/180)*Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
 const genreColor = (genre = "") => {
@@ -63,85 +102,47 @@ const genreLabel = (genre = "") => {
   return genre.split(" ")[0].charAt(0).toUpperCase() + genre.split(" ")[0].slice(1);
 };
 
-function artistKey(artistName) {
-  return `saved||${artistName}`;
-}
+function ShowCard({ show, accentColor, userCoords }) {
+  const dateStr = show.datetime
+    ? new Date(show.datetime).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })
+    : "Date TBD";
 
-async function shareArtist(artistName, url) {
-  const text = `Check out ${artistName} on tour!\n${url}`;
-  if (navigator.share) {
-    try { await navigator.share({ title: `${artistName} live`, text }); return "shared"; }
-    catch { return "cancelled"; }
-  } else {
-    await navigator.clipboard.writeText(text);
-    return "copied";
-  }
-}
-
-function ArtistResultCard({ artist, bitUrl, starred, onStar }) {
-  const [shareState, setShareState] = useState(null);
-  const accent = genreColor(artist.genres?.[0] || "");
-
-  const handleShare = async () => {
-    const result = await shareArtist(artist.name, bitUrl);
-    if (result !== "cancelled") { setShareState(result); setTimeout(() => setShareState(null), 2000); }
-  };
+  const dist = userCoords && show.venue.latitude && show.venue.longitude
+    ? Math.round(haversineDistance(userCoords.lat, userCoords.lon, parseFloat(show.venue.latitude), parseFloat(show.venue.longitude)))
+    : null;
 
   return (
     <div style={{
-      background: starred ? "#0f0f1f" : "#0c0c18",
-      border: `1px solid ${starred ? accent + "55" : "#1e1e30"}`,
-      borderRadius: 12, overflow: "hidden",
-      transition: "border-color 0.15s, background 0.15s",
-      marginBottom: 16,
+      background: "#0c0c18", border: `1px solid ${accentColor}33`,
+      borderRadius: 9, overflow: "hidden", marginBottom: 8,
     }}>
-      {/* Artist header */}
-      <div style={{ padding: "14px 16px 10px", display: "flex", alignItems: "center", gap: 12, borderBottom: `1px solid ${accent}20` }}>
-        {artist.image
-          ? <img src={artist.image} alt={artist.name} style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover", border: `1px solid ${accent}44`, flexShrink: 0 }} />
-          : <div style={{ width: 44, height: 44, borderRadius: "50%", background: `${accent}22`, border: `1px solid ${accent}44`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>🎵</div>
-        }
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ color: "#fff", fontWeight: 800, fontSize: 15, fontFamily: "'Inter', sans-serif", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{artist.name}</div>
-          <div style={{ display: "flex", gap: 7, alignItems: "center", marginTop: 3 }}>
-            {artist.genres?.[0] && <span style={{ background: `${accent}22`, color: accent, borderRadius: 3, padding: "1px 6px", fontSize: 10, fontWeight: 600 }}>{genreLabel(artist.genres[0])}</span>}
-            <span style={{ color: "#334455", fontSize: 11 }}>{artist.likedSongs} liked songs</span>
-          </div>
+      {show.imageUrl && (
+        <img src={show.imageUrl} alt={show.name} style={{ width: "100%", height: 120, objectFit: "cover", opacity: 0.7 }} />
+      )}
+      <div style={{ padding: "12px 14px" }}>
+        <div style={{ color: "#fff", fontWeight: 700, fontSize: 13, marginBottom: 4, fontFamily: "'Inter', sans-serif" }}>
+          {show.name}
         </div>
-        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-          <button onClick={handleShare} title="Share" style={{
-            background: shareState ? "#1a2a1a" : "#111120",
-            border: `1px solid ${shareState ? "#1db95444" : "#2a2a40"}`,
-            borderRadius: 6, width: 30, height: 30,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            cursor: "pointer", fontSize: 13, color: shareState ? "#1db954" : "#556",
-          }}>{shareState ? "✓" : "⬆"}</button>
-          <button onClick={onStar} title={starred ? "Unsave" : "Save"} style={{
-            background: starred ? `${accent}18` : "#111120",
-            border: `1px solid ${starred ? accent + "55" : "#2a2a40"}`,
-            borderRadius: 6, width: 30, height: 30,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            cursor: "pointer", fontSize: 14,
-          }}>{starred ? "★" : "☆"}</button>
+        <div style={{ color: accentColor, fontSize: 12, marginBottom: 4, fontFamily: "monospace" }}>
+          {dateStr}
         </div>
-      </div>
-
-      {/* Action buttons */}
-      <div style={{ padding: "12px 16px", display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <a href={bitUrl} target="_blank" rel="noopener noreferrer" style={{
-          background: "#1db954", color: "#000",
-          borderRadius: 6, padding: "8px 16px",
+        <div style={{ color: "#556677", fontSize: 12, marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
+          <span>{[show.venue.name, show.venue.city, show.venue.region].filter(Boolean).join(" · ")}</span>
+          {dist !== null && (
+            <span style={{ background: "#1a2a3a", color: "#4d90c0", borderRadius: 4, padding: "1px 6px", fontSize: 10, fontWeight: 600 }}>
+              {dist} mi
+            </span>
+          )}
+        </div>
+        <a href={show.ticketUrl} target="_blank" rel="noopener noreferrer" style={{
+          display: "inline-flex", alignItems: "center", gap: 6,
+          background: "#026cdf", color: "#fff",
+          borderRadius: 6, padding: "7px 14px",
           fontSize: 12, fontWeight: 700, textDecoration: "none",
           fontFamily: "'Inter', sans-serif",
-          display: "inline-flex", alignItems: "center", gap: 6,
-        }}>🎟 See Shows on Bandsintown</a>
-        <a href={`https://open.spotify.com/artist/${artist.id}`} target="_blank" rel="noopener noreferrer" style={{
-          background: "#111120", border: "1px solid #2a2a40",
-          color: "#7799bb", borderRadius: 6, padding: "7px 14px",
-          fontSize: 11, fontWeight: 500, textDecoration: "none",
-          fontFamily: "'Inter', sans-serif",
-          display: "inline-flex", alignItems: "center", gap: 5,
-        }}>♫ Spotify</a>
+        }}>
+          🎟 Buy Tickets on Ticketmaster
+        </a>
       </div>
     </div>
   );
@@ -204,55 +205,8 @@ function GenreFilterBar({ genres, activeGenre, onChange }) {
   );
 }
 
-function SavedDrawer({ savedArtists, allResults, onUnsave, onClose }) {
-  const saved = allResults.filter(({ artist }) => savedArtists.has(artistKey(artist.name)));
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", display: "flex", alignItems: "flex-end", justifyContent: "center", zIndex: 100 }}>
-      <div style={{ background: "#0d0d1a", border: "1px solid #2a2a40", borderRadius: "14px 14px 0 0", width: "100%", maxWidth: 660, maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
-        <div style={{ padding: "14px 20px 0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 16 }}>★</span>
-            <span style={{ color: "#fff", fontWeight: 800, fontSize: 15, fontFamily: "'Inter', sans-serif" }}>Saved Artists</span>
-            <span style={{ background: "#1e1e38", color: "#8899aa", borderRadius: 10, padding: "1px 7px", fontSize: 11 }}>{saved.length}</span>
-          </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "#445566", fontSize: 20, cursor: "pointer" }}>✕</button>
-        </div>
-        <div style={{ overflowY: "auto", padding: "14px 18px 24px", flex: 1 }}>
-          {saved.length === 0 ? (
-            <div style={{ textAlign: "center", padding: "36px 0", color: "#334455", fontSize: 13 }}>Star any artist to save them here.</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {saved.map(({ artist, bitUrl }) => {
-                const accent = genreColor(artist.genres?.[0] || "");
-                const key = artistKey(artist.name);
-                return (
-                  <div key={key} style={{ background: "#0c0c18", border: `1px solid ${accent}33`, borderRadius: 9, padding: "11px 13px", display: "flex", alignItems: "center", gap: 12 }}>
-                    {artist.image
-                      ? <img src={artist.image} alt={artist.name} style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover", border: `1px solid ${accent}44` }} />
-                      : <div style={{ width: 36, height: 36, borderRadius: "50%", background: `${accent}18`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>🎵</div>
-                    }
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ color: "#dde", fontWeight: 700, fontSize: 13, fontFamily: "'Inter', sans-serif" }}>{artist.name}</div>
-                      {artist.genres?.[0] && <span style={{ background: `${accent}22`, color: accent, borderRadius: 3, padding: "1px 5px", fontSize: 10, fontWeight: 600 }}>{genreLabel(artist.genres[0])}</span>}
-                    </div>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <a href={bitUrl} target="_blank" rel="noopener noreferrer" style={{ background: "#1db954", color: "#000", borderRadius: 5, padding: "4px 10px", fontSize: 10, fontWeight: 700, textDecoration: "none" }}>🎟 Shows</a>
-                      <button onClick={() => onUnsave(key)} style={{ background: `${accent}18`, border: `1px solid ${accent}44`, color: accent, borderRadius: 5, width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 13 }}>★</button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   const [phase, setPhase]               = useState("connect");
-  const [accessToken, setAccessToken]   = useState(null);
   const [spotifyUser, setSpotifyUser]   = useState(null);
   const [artists, setArtists]           = useState([]);
   const [spotifyError, setSpotifyError] = useState(null);
@@ -261,10 +215,11 @@ export default function App() {
   const [zip, setZip]                   = useState("");
   const [zipError, setZipError]         = useState("");
   const [loading, setLoading]           = useState(false);
-  const [rawResults, setRawResults]     = useState([]);
+  const [loadingMsg, setLoadingMsg]     = useState("");
+  const [results, setResults]           = useState([]);
   const [userCoords, setUserCoords]     = useState(null);
-  const [savedArtists, setSavedArtists] = useState(new Set());
-  const [showSaved, setShowSaved]       = useState(false);
+  const [radiusMiles, setRadiusMiles]   = useState(100);
+  const [sortBy, setSortBy]             = useState("date");
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -272,7 +227,6 @@ export default function App() {
     const error  = params.get("error");
     if (error) { setSpotifyError("Spotify login failed. Please try again."); window.history.replaceState({}, "", "/"); return; }
     if (token) {
-      setAccessToken(token);
       window.history.replaceState({}, "", "/");
       setPhase("loading");
       Promise.all([
@@ -304,38 +258,53 @@ export default function App() {
     return next;
   });
 
-  const toggleStar = (key) => setSavedArtists(prev => {
-    const next = new Set(prev);
-    next.has(key) ? next.delete(key) : next.add(key);
-    return next;
-  });
-
   const handleFindShows = async () => {
     if (zip.length !== 5 || isNaN(zip)) { setZipError("Enter a valid 5-digit ZIP code."); return; }
     setZipError("");
     setLoading(true);
+    setLoadingMsg("Looking up your location…");
+
     const coords = await zipToCoords(zip);
     if (!coords) { setZipError("Couldn't find that ZIP. Try another."); setLoading(false); return; }
     setUserCoords(coords);
 
     const selected = artists.filter(a => selectedArtists.has(a.id));
+    const allResults = [];
 
-    // Fetch Bandsintown profile URLs for all selected artists
-    const results = await Promise.all(
-      selected.map(async artist => {
-        const bitUrl = await fetchBandsintownProfile(artist.name);
-        return { artist, bitUrl };
-      })
-    );
+    for (let i = 0; i < selected.length; i++) {
+      const artist = selected[i];
+      setLoadingMsg(`Checking ${artist.name}… (${i + 1}/${selected.length})`);
+      const shows = await fetchTicketmasterShows(artist.name, coords.lat, coords.lon, radiusMiles);
+      if (shows.length > 0) {
+        allResults.push({ artist, shows });
+      }
+      // Ticketmaster rate limit: 5 req/sec, we do 2 per artist so wait 400ms
+      await new Promise(r => setTimeout(r, 400));
+    }
 
-    setRawResults(results);
+    setResults(allResults);
     setPhase("results");
     setLoading(false);
   };
 
+  // Flatten + sort for date view
+  const sortedResults = useMemo(() => {
+    if (sortBy === "artist") return results;
+    const flat = results.flatMap(({ artist, shows }) => shows.map(show => ({ artist, show })));
+    if (sortBy === "date") flat.sort((a, b) => new Date(a.show.datetime) - new Date(b.show.datetime));
+    if (sortBy === "distance" && userCoords) {
+      flat.sort((a, b) => {
+        const d = (s) => s.venue.latitude ? haversineDistance(userCoords.lat, userCoords.lon, parseFloat(s.venue.latitude), parseFloat(s.venue.longitude)) : 9999;
+        return d(a.show) - d(b.show);
+      });
+    }
+    return flat;
+  }, [results, sortBy, userCoords]);
+
+  const totalShows = results.reduce((sum, r) => sum + r.shows.length, 0);
+
   return (
     <div style={{ minHeight: "100vh", background: "#07070f", fontFamily: "'Inter', sans-serif", color: "#ccd" }}>
-      {showSaved && <SavedDrawer savedArtists={savedArtists} allResults={rawResults} onUnsave={toggleStar} onClose={() => setShowSaved(false)} />}
 
       {/* Header */}
       <div style={{ borderBottom: "1px solid #141420", padding: "13px 22px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: "#07070f", zIndex: 10 }}>
@@ -343,26 +312,15 @@ export default function App() {
           <div style={{ width: 30, height: 30, borderRadius: 7, background: "linear-gradient(135deg, #1db954, #116b32)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>🎸</div>
           <div>
             <div style={{ color: "#fff", fontWeight: 800, fontSize: 14, letterSpacing: "-0.3px" }}>TourFinder</div>
-            <div style={{ color: "#223344", fontSize: 9, textTransform: "uppercase", letterSpacing: "0.1em" }}>Spotify + Bandsintown</div>
+            <div style={{ color: "#223344", fontSize: 9, textTransform: "uppercase", letterSpacing: "0.1em" }}>Spotify + Ticketmaster</div>
           </div>
         </div>
-        <div style={{ display: "flex", gap: 7, alignItems: "center" }}>
-          {phase === "results" && (
-            <button onClick={() => setShowSaved(true)} style={{
-              background: savedArtists.size > 0 ? "#1a1a10" : "#0c0c18",
-              border: `1px solid ${savedArtists.size > 0 ? "#c8a96e55" : "#1e1e30"}`,
-              color: savedArtists.size > 0 ? "#c8a96e" : "#445566",
-              borderRadius: 6, padding: "5px 11px", fontSize: 11, cursor: "pointer",
-              display: "flex", alignItems: "center", gap: 5,
-            }}>★ {savedArtists.size > 0 ? savedArtists.size : "Saved"}</button>
-          )}
-          {spotifyUser && (
-            <div style={{ color: "#334455", fontSize: 11, display: "flex", alignItems: "center", gap: 5 }}>
-              <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#1db954" }} />
-              {spotifyUser.display_name}
-            </div>
-          )}
-        </div>
+        {spotifyUser && (
+          <div style={{ color: "#334455", fontSize: 11, display: "flex", alignItems: "center", gap: 5 }}>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#1db954" }} />
+            {spotifyUser.display_name}
+          </div>
+        )}
       </div>
 
       <div style={{ maxWidth: 660, margin: "0 auto", padding: "26px 16px" }}>
@@ -373,7 +331,7 @@ export default function App() {
             <div style={{ width: 68, height: 68, borderRadius: "50%", background: "linear-gradient(135deg, #1db95420, #1db95440)", border: "1.5px solid #1db95450", margin: "0 auto 20px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 30 }}>🎵</div>
             <h1 style={{ color: "#fff", fontSize: 23, fontWeight: 800, letterSpacing: "-0.5px", margin: "0 0 10px" }}>Your music. Live, near you.</h1>
             <p style={{ color: "#334455", fontSize: 13, lineHeight: 1.7, maxWidth: 380, margin: "0 auto 26px" }}>
-              Connect your Spotify to see your most-liked artists and find their upcoming shows on Bandsintown.
+              Connect your Spotify to see which of your most-liked artists are performing near you — with direct Ticketmaster links to buy tickets.
             </p>
             {spotifyError && (
               <div style={{ background: "#200a0a", border: "1px solid #cc444433", borderRadius: 8, padding: "10px 14px", color: "#cc6666", fontSize: 12, maxWidth: 340, margin: "0 auto 16px" }}>
@@ -386,7 +344,7 @@ export default function App() {
           </div>
         )}
 
-        {/* LOADING */}
+        {/* LOADING SPOTIFY */}
         {phase === "loading" && (
           <div style={{ textAlign: "center", paddingTop: 80 }}>
             <div style={{ fontSize: 36, marginBottom: 20 }}>🎵</div>
@@ -420,14 +378,23 @@ export default function App() {
 
             <div style={{ background: "#0c0c18", border: "1px solid #1a1a2a", borderRadius: 12, padding: "16px 18px" }}>
               <div style={{ color: "#445566", fontSize: 11, marginBottom: 12 }}>{selectedArtists.size} artist{selectedArtists.size !== 1 ? "s" : ""} selected</div>
-              <div style={{ marginBottom: 12 }}>
-                <label style={{ color: "#334455", fontSize: 10, display: "block", marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.07em" }}>ZIP Code</label>
-                <input type="text" maxLength={5} value={zip}
-                  onChange={e => { setZip(e.target.value.replace(/\D/g, "")); setZipError(""); }}
-                  placeholder="e.g. 91601"
-                  style={{ width: "100%", background: "#07070f", border: `1px solid ${zipError ? "#cc4444" : "#1e1e30"}`, borderRadius: 7, padding: "9px 11px", color: "#dde", fontSize: 14, outline: "none", boxSizing: "border-box", fontFamily: "monospace" }}
-                />
-                {zipError && <div style={{ color: "#cc5555", fontSize: 11, marginTop: 4 }}>{zipError}</div>}
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+                <div style={{ flex: 1, minWidth: 140 }}>
+                  <label style={{ color: "#334455", fontSize: 10, display: "block", marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.07em" }}>ZIP Code</label>
+                  <input type="text" maxLength={5} value={zip}
+                    onChange={e => { setZip(e.target.value.replace(/\D/g, "")); setZipError(""); }}
+                    placeholder="e.g. 91601"
+                    style={{ width: "100%", background: "#07070f", border: `1px solid ${zipError ? "#cc4444" : "#1e1e30"}`, borderRadius: 7, padding: "9px 11px", color: "#dde", fontSize: 14, outline: "none", boxSizing: "border-box", fontFamily: "monospace" }}
+                  />
+                  {zipError && <div style={{ color: "#cc5555", fontSize: 11, marginTop: 4 }}>{zipError}</div>}
+                </div>
+                <div style={{ flex: 1, minWidth: 140 }}>
+                  <label style={{ color: "#334455", fontSize: 10, display: "block", marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.07em" }}>Radius: {radiusMiles} mi</label>
+                  <input type="range" min={25} max={300} step={25} value={radiusMiles}
+                    onChange={e => setRadiusMiles(Number(e.target.value))}
+                    style={{ width: "100%", accentColor: "#1db954", marginTop: 10 }}
+                  />
+                </div>
               </div>
               <button onClick={handleFindShows} disabled={loading || selectedArtists.size === 0} style={{
                 width: "100%", padding: "11px",
@@ -435,7 +402,7 @@ export default function App() {
                 color: selectedArtists.size === 0 ? "#223" : "#000",
                 border: "none", borderRadius: 8, fontSize: 13, fontWeight: 800,
                 cursor: selectedArtists.size === 0 ? "not-allowed" : "pointer",
-              }}>{loading ? "Looking up artists…" : "Find Shows Near Me →"}</button>
+              }}>{loading ? loadingMsg : "Find Shows Near Me →"}</button>
             </div>
           </div>
         )}
@@ -443,30 +410,87 @@ export default function App() {
         {/* RESULTS */}
         {phase === "results" && (
           <div>
-            <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
               <button onClick={() => setPhase("artists")} style={{ background: "none", border: "1px solid #1e1e30", color: "#334455", borderRadius: 6, padding: "6px 11px", fontSize: 11, cursor: "pointer", marginTop: 2, flexShrink: 0 }}>← Back</button>
               <div>
                 <h2 style={{ color: "#fff", fontSize: 16, fontWeight: 800, margin: "0 0 2px", letterSpacing: "-0.3px" }}>
-                  {rawResults.length} artist{rawResults.length !== 1 ? "s" : ""} from your library
+                  {totalShows > 0
+                    ? `${totalShows} show${totalShows !== 1 ? "s" : ""} from ${results.length} artist${results.length !== 1 ? "s" : ""} near ${userCoords?.city}`
+                    : `No shows found near ${userCoords?.city}`}
                 </h2>
-                <div style={{ color: "#223344", fontSize: 11 }}>Click "See Shows on Bandsintown" to view upcoming concerts</div>
+                <div style={{ color: "#223344", fontSize: 11 }}>Within {radiusMiles} mi · Ticketmaster · Direct ticket links</div>
               </div>
             </div>
 
-            <div style={{ display: "flex", flexDirection: "column" }}>
-              {rawResults.map(({ artist, bitUrl }) => {
-                const key = artistKey(artist.name);
-                return (
-                  <ArtistResultCard
-                    key={artist.id}
-                    artist={artist}
-                    bitUrl={bitUrl}
-                    starred={savedArtists.has(key)}
-                    onStar={() => toggleStar(key)}
-                  />
-                );
-              })}
-            </div>
+            {totalShows === 0 ? (
+              <div style={{ textAlign: "center", padding: "44px 20px", background: "#0c0c18", border: "1px solid #1a1a2a", borderRadius: 12 }}>
+                <div style={{ fontSize: 36, marginBottom: 14 }}>🎸</div>
+                <div style={{ color: "#334455", fontSize: 13, marginBottom: 16 }}>No Ticketmaster shows found within {radiusMiles} miles. Try a wider radius.</div>
+                <button onClick={() => setPhase("artists")} style={{ background: "#141420", border: "1px solid #1e1e30", color: "#5566aa", borderRadius: 7, padding: "9px 18px", fontSize: 12, cursor: "pointer" }}>
+                  Adjust radius →
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* Sort bar */}
+                <div style={{ display: "flex", gap: 1, background: "#0c0c18", border: "1px solid #1e1e30", borderRadius: 8, padding: 3, width: "fit-content", marginBottom: 16 }}>
+                  {[["date","Date"],["distance","Distance"],["artist","Artist"]].map(([key, label]) => (
+                    <button key={key} onClick={() => setSortBy(key)} style={{
+                      background: sortBy === key ? "#1e1e38" : "none", border: "none",
+                      color: sortBy === key ? "#fff" : "#445566",
+                      borderRadius: 6, padding: "5px 12px",
+                      fontSize: 11, fontWeight: sortBy === key ? 700 : 400,
+                      cursor: "pointer", fontFamily: "'Inter', sans-serif",
+                    }}>{label}</button>
+                  ))}
+                </div>
+
+                {/* Flat date/distance view */}
+                {(sortBy === "date" || sortBy === "distance") && (
+                  <div>
+                    {sortedResults.map(({ artist, show }, i) => {
+                      const accent = genreColor(artist.genres?.[0] || "");
+                      return (
+                        <div key={i} style={{ marginBottom: 16 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                            {artist.image && <img src={artist.image} alt={artist.name} style={{ width: 22, height: 22, borderRadius: "50%", objectFit: "cover" }} />}
+                            <span style={{ background: `${accent}18`, color: accent, borderRadius: 4, padding: "2px 8px", fontSize: 11, fontWeight: 700 }}>{artist.name}</span>
+                          </div>
+                          <ShowCard show={show} accentColor={accent} userCoords={userCoords} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Grouped artist view */}
+                {sortBy === "artist" && (
+                  <div>
+                    {results.map(({ artist, shows }) => {
+                      const accent = genreColor(artist.genres?.[0] || "");
+                      return (
+                        <div key={artist.id} style={{ marginBottom: 28 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, paddingBottom: 9, borderBottom: `1px solid ${accent}25` }}>
+                            {artist.image
+                              ? <img src={artist.image} alt={artist.name} style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover", border: `1px solid ${accent}40` }} />
+                              : <div style={{ width: 36, height: 36, borderRadius: "50%", background: `${accent}18`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>🎵</div>
+                            }
+                            <div>
+                              <div style={{ color: "#fff", fontWeight: 800, fontSize: 15 }}>{artist.name}</div>
+                              <div style={{ display: "flex", gap: 7, alignItems: "center", marginTop: 2 }}>
+                                {artist.genres?.[0] && <span style={{ background: `${accent}22`, color: accent, borderRadius: 3, padding: "1px 5px", fontSize: 10, fontWeight: 600 }}>{genreLabel(artist.genres[0])}</span>}
+                                <span style={{ color: "#223344", fontSize: 10 }}>{shows.length} show{shows.length !== 1 ? "s" : ""} nearby</span>
+                              </div>
+                            </div>
+                          </div>
+                          {shows.map((show, i) => <ShowCard key={i} show={show} accentColor={accent} userCoords={userCoords} />)}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
       </div>
